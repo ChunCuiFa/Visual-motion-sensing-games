@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>体感游戏 · PC 原型</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0f1a; color: #dfe6f3; font-family: system-ui, "Microsoft YaHei", sans-serif; }
+    body { display: flex; flex-direction: column; align-items: center; }
+    #wrap { position: relative; width: min(100vw, calc((100vh - 120px) * 16 / 9)); aspect-ratio: 16 / 9; background: #000; }
+    #wrap:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; }
+    canvas { width: 100%; height: 100%; display: block; object-fit: contain; }
+    #overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 30px; line-height: 1.4; white-space: pre-line; pointer-events: none; text-shadow: 0 0 8px #000; text-align: center; }
+    .bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px; width: min(100vw, calc((100vh - 120px) * 16 / 9)); box-sizing: border-box; font-size: 16px; }
+    button { padding: 8px 18px; font-size: 16px; cursor: pointer; }
+    select { font-size: 16px; max-width: 360px; }
+    label { font-size: 16px; }
+    #hud { width: min(100vw, calc((100vh - 120px) * 16 / 9)); display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 10px; box-sizing: border-box; font-variant-numeric: tabular-nums; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="cv" width="1280" height="720"></canvas>
+    <div id="overlay">正在启动摄像头…</div>
+  </div>
+  <div class="bar">
+    <label>游戏 <select id="game">
+      <option value="brick">打砖块</option>
+      <option value="pinball">弹珠</option>
+    </select></label>
+    <button id="startBtn">开始</button>
+    <button id="fullBtn">全屏</button>
+    <label>摄像头 <select id="camera"></select></label>
+    <label class="only-brick">BPM <input id="bpm" type="range" min="60" max="160" value="100"> <span id="bpmV">100</span></label>
+    <label class="only-brick">延迟补偿(ms) <input id="offset" type="range" min="-200" max="300" value="0"> <span id="offsetV">0</span></label>
+    <label class="only-brick">挥动速度阈值 <input id="speed" type="range" min="0" max="200" value="60"> <span id="speedV">0.60</span></label>
+    <label class="only-pinball">平台跟随范围 <input id="psens" type="range" min="30" max="120" value="60"> <span id="psensV">0.60</span></label>
+    <label class="only-pinball">球速 <input id="bspeed" type="range" min="30" max="130" value="90"> <span id="bspeedV">0.90</span></label>
+    <label class="only-brick"><input id="newbie" type="checkbox"> 新手模式</label>
+    <label class="only-brick"><input id="handsOnly" type="checkbox"> 只用双手</label>
+    <label><input id="skeleton" type="checkbox" checked> 显示骨骼</label>
+    <label class="only-brick"><input id="click" type="checkbox" checked> 节拍音</label>
+  </div>
+  <div id="hud">
+    <span id="score">得分 0</span>
+    <span id="perf">--</span>
+    <span id="diag">--</span>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
