@@ -44,11 +44,12 @@ const PP_NET = 360;
 const PP_PADDLE_W = 150;
 const PP_AI_W = 130;
 const PP_HIT_R = 130;
-const PP_AI_R = 130;
-const PP_AI_SPEED = 430;
+const PP_AI_R = 100;
+const PP_AI_COMMIT = 120;
+const PP_AIM_GAIN = 320;
 const PP_BASE_VY = 560;
 const PP_MAX_VY = 1150;
-const PP_VX = 360;
+const PP_VX = 520;
 const PP_RAMP = 1.06;
 const PP_HIT_BAND = 130;
 const PP_TARGET = 11;
@@ -76,6 +77,8 @@ const ui = {
   ppspeedV: $("ppspeedV"),
   ppswing: $("ppswing"),
   ppswingV: $("ppswingV"),
+  ppai: $("ppai"),
+  ppaiV: $("ppaiV"),
   newbie: $("newbie"),
   handsOnly: $("handsOnly"),
   skeleton: $("skeleton"),
@@ -118,6 +121,7 @@ bindLabel(ui.psens, ui.psensV, (v) => (v / 100).toFixed(2));
 bindLabel(ui.bspeed, ui.bspeedV, (v) => (v / 100).toFixed(2));
 bindLabel(ui.ppspeed, ui.ppspeedV, (v) => (v / 100).toFixed(2));
 bindLabel(ui.ppswing, ui.ppswingV, (v) => (v / 100).toFixed(2));
+bindLabel(ui.ppai, ui.ppaiV, (v) => v);
 
 class OneEuro {
   constructor(minCutoff = 1.5, beta = 0.5, dCutoff = 1.0) {
@@ -279,10 +283,13 @@ function onPose(lm, stamp) {
     const y = f.y.filter(p.y, stamp);
     const prev = lastPts.get(id);
     let s = 0;
+    let vx = 0;
     if (prev && stamp - prev.t < 200) {
-      s = Math.hypot(x - prev.x, y - prev.y) / ((stamp - prev.t) / 1000);
+      const dt = (stamp - prev.t) / 1000;
+      s = Math.hypot(x - prev.x, y - prev.y) / dt;
+      vx = (x - prev.x) / dt;
     }
-    const pt = { x, y, s, t: stamp };
+    const pt = { x, y, s, vx, t: stamp };
     lastPts.set(id, pt);
     sample.pts[id] = pt;
   }
@@ -694,7 +701,7 @@ function updateHud() {
     const h = HAND_POINTS.filter((id) => lastPts.has(id)).length;
     const f = FOOT_POINTS.filter((id) => lastPts.has(id)).length;
     ui.score.textContent = `比分 你 ${ppPointMe} : ${ppPointAi} 对手　对拉 ${ppRally} 拍　运动分 ${ppScore}`;
-    ui.diag.textContent = `手 ${h}/2 脚 ${f}/2 ┃ 球速 ×${(Number(ui.ppspeed.value) / 100).toFixed(2)} ┃ 挥拍阈值 ${(Number(ui.ppswing.value) / 100).toFixed(2)}`;
+    ui.diag.textContent = `手 ${h}/2 脚 ${f}/2 ┃ 球速 ×${(Number(ui.ppspeed.value) / 100).toFixed(2)} ┃ 挥拍阈值 ${(Number(ui.ppswing.value) / 100).toFixed(2)} ┃ 对手强度 ${ui.ppai.value}`;
     if (ppMsg && now - ppMsgAt < 2500) ui.diag.textContent += ` ┃ ${ppMsg}`;
     return;
   }
@@ -719,7 +726,7 @@ function updateOverlay(now) {
     if (!running) {
       if (now - lastPoseAt > 800) { setMessage("没看到人\n请站到画面里"); return; }
       if (!lastPts.has(15) && !lastPts.has(16)) { setMessage("没看到双手\n请站到画面里"); return; }
-      setMessage(`玩法：把球拍（双手中点）移到球的横向位置并挥动来击球\n蓝色竖线对应你的双手位置，用来对照球在哪\n先到 ${PP_TARGET} 分获胜；对拉越久球越快，越打越累`);
+      setMessage(`玩法：把球拍（双手中点）移到球的横向位置并挥动来击球\n往左/往右挥动决定回球方向 —— 看对手橙色球拍在哪，往空档打\n先到 ${PP_TARGET} 分获胜；对拉越久球越快，越打越累`);
       return;
     }
     if (now - lastPoseAt > 800) setMessage("未检测到人，请站到画面里");
@@ -973,6 +980,7 @@ function ppServe() {
 
 function ppStep(h, now, thresh) {
   const b = ppBall;
+  if (!b.active) return;
   b.x += b.vx * h;
   b.y += b.vy * h;
   if (b.x < PP_LEFT) { b.x = PP_LEFT; b.vx = Math.abs(b.vx); }
@@ -982,10 +990,13 @@ function ppStep(h, now, thresh) {
     const hl = lastPts.get(15);
     const hr = lastPts.get(16);
     const swing = Math.max(hl ? hl.s : 0, hr ? hr.s : 0);
+    let aim = 0;
+    if (hl && hr) aim = (hl.vx + hr.vx) / 2;
+    else if (hl) aim = hl.vx;
+    else if (hr) aim = hr.vx;
     if (Math.abs(ppPaddleX - b.x) < PP_HIT_R && swing >= thresh) {
-      const off = clamp((ppPaddleX - b.x) / PP_HIT_R, -1, 1);
       b.vy = -Math.min(PP_MAX_VY, Math.abs(b.vy) * PP_RAMP + 60);
-      b.vx = off * PP_VX;
+      b.vx = clamp(aim * PP_AIM_GAIN, -PP_VX, PP_VX);
       ppRally++;
       const pts = 10 + Math.min(ppRally, 20) * 2;
       ppScore += pts;
@@ -1012,7 +1023,7 @@ function ppStep(h, now, thresh) {
       b.vx = off * PP_VX * 0.9;
       return;
     }
-    if (b.y < PP_TOP - 40) {
+    if (b.y < PP_TOP) {
       b.active = false;
       ppPointMe++;
       ppScore += 40;
@@ -1021,6 +1032,7 @@ function ppStep(h, now, thresh) {
       ppMsg = "对手没接到，你得分！";
       ppMsgAt = now;
       if (ppPointMe >= PP_TARGET) { ppOver = true; running = false; ppMsg = "你赢下这一局！"; }
+      return;
     }
   }
 }
@@ -1034,8 +1046,8 @@ function updatePing(now, dt) {
   else if (hr) px = hr.x * W;
   if (px !== null) ppPaddleX += 0.3 * (px - ppPaddleX);
 
-  if (ppBall.active && ppBall.vy < 0) {
-    const step = PP_AI_SPEED * dt;
+  if (ppBall.active && ppBall.vy < 0 && ppBall.y > PP_TOP + PP_AI_COMMIT) {
+    const step = Number(ui.ppai.value) * dt;
     ppAiX += clamp(ppBall.x - ppAiX, -step, step);
   }
   ppAiX = clamp(ppAiX, PP_LEFT + PP_AI_W / 2, PP_RIGHT - PP_AI_W / 2);
