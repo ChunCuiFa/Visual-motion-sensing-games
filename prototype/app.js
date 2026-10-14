@@ -36,6 +36,23 @@ const EFFECT_MS = 8000;
 const SLOW_FACTOR = 0.6;
 const LIFE_PER_ITEMS = 4;
 
+const PP_LEFT = 150;
+const PP_RIGHT = 1130;
+const PP_TOP = 60;
+const PP_BOTTOM = 660;
+const PP_NET = 360;
+const PP_PADDLE_W = 150;
+const PP_AI_W = 130;
+const PP_HIT_R = 130;
+const PP_AI_R = 130;
+const PP_AI_SPEED = 430;
+const PP_BASE_VY = 560;
+const PP_MAX_VY = 1150;
+const PP_VX = 360;
+const PP_RAMP = 1.06;
+const PP_HIT_BAND = 130;
+const PP_TARGET = 11;
+
 const $ = (id) => document.getElementById(id);
 const ui = {
   wrap: $("wrap"),
@@ -55,6 +72,10 @@ const ui = {
   psensV: $("psensV"),
   bspeed: $("bspeed"),
   bspeedV: $("bspeedV"),
+  ppspeed: $("ppspeed"),
+  ppspeedV: $("ppspeedV"),
+  ppswing: $("ppswing"),
+  ppswingV: $("ppswingV"),
   newbie: $("newbie"),
   handsOnly: $("handsOnly"),
   skeleton: $("skeleton"),
@@ -95,6 +116,8 @@ bindLabel(ui.offset, ui.offsetV, (v) => v);
 bindLabel(ui.speed, ui.speedV, (v) => (v / 100).toFixed(2));
 bindLabel(ui.psens, ui.psensV, (v) => (v / 100).toFixed(2));
 bindLabel(ui.bspeed, ui.bspeedV, (v) => (v / 100).toFixed(2));
+bindLabel(ui.ppspeed, ui.ppspeedV, (v) => (v / 100).toFixed(2));
+bindLabel(ui.ppswing, ui.ppswingV, (v) => (v / 100).toFixed(2));
 
 class OneEuro {
   constructor(minCutoff = 1.5, beta = 0.5, dCutoff = 1.0) {
@@ -179,6 +202,19 @@ let pinOver = false;
 let pinMsg = "";
 let pinMsgAt = 0;
 
+let ppBall = { x: W / 2, y: PP_TOP + 60, vx: 0, vy: 0, active: false };
+let ppTrail = [];
+let ppAiX = W / 2;
+let ppPaddleX = W / 2;
+let ppPointMe = 0;
+let ppPointAi = 0;
+let ppRally = 0;
+let ppScore = 0;
+let ppServeTimer = 0;
+let ppOver = false;
+let ppMsg = "";
+let ppMsgAt = 0;
+
 let procMs = 0;
 let frames = 0;
 let fps = 0;
@@ -193,6 +229,7 @@ function applyMode() {
   const m = mode();
   for (const el of document.querySelectorAll(".only-brick")) el.style.display = m === "brick" ? "" : "none";
   for (const el of document.querySelectorAll(".only-pinball")) el.style.display = m === "pinball" ? "" : "none";
+  for (const el of document.querySelectorAll(".only-ping")) el.style.display = m === "pingpong" ? "" : "none";
 }
 
 function updateBodyX(lm) {
@@ -621,8 +658,10 @@ function draw(now) {
     drawBlocks(now);
     drawTrails(now);
     drawBeat(now);
-  } else {
+  } else if (mode() === "pinball") {
     drawPinball(now);
+  } else {
+    drawPing();
   }
 }
 
@@ -651,6 +690,14 @@ function updateHud() {
     if (lastReason && now - lastReasonAt < 4000) ui.diag.textContent += ` ┃ ⚠ ${lastReason}`;
     return;
   }
+  if (mode() === "pingpong") {
+    const h = HAND_POINTS.filter((id) => lastPts.has(id)).length;
+    const f = FOOT_POINTS.filter((id) => lastPts.has(id)).length;
+    ui.score.textContent = `比分 你 ${ppPointMe} : ${ppPointAi} 对手　对拉 ${ppRally} 拍　运动分 ${ppScore}`;
+    ui.diag.textContent = `手 ${h}/2 脚 ${f}/2 ┃ 球速 ×${(Number(ui.ppspeed.value) / 100).toFixed(2)} ┃ 挥拍阈值 ${(Number(ui.ppswing.value) / 100).toFixed(2)}`;
+    if (ppMsg && now - ppMsgAt < 2500) ui.diag.textContent += ` ┃ ${ppMsg}`;
+    return;
+  }
   const hands = HAND_POINTS.filter((id) => lastPts.has(id)).length;
   const feet = FOOT_POINTS.filter((id) => lastPts.has(id)).length;
   ui.score.textContent = `得分 ${pinScore}  命 ${pinLives}  击球 ${pinHits}  道具 ${pinItems}（手 ${pinHands} 脚 ${pinFeet}）`;
@@ -664,6 +711,21 @@ function updateHud() {
 
 function updateOverlay(now) {
   if (!workerReady || !camReady) return;
+  if (mode() === "pingpong") {
+    if (ppOver) {
+      setMessage(`本局结束　你 ${ppPointMe} : ${ppPointAi} 对手\n点击“开始”再来一局`);
+      return;
+    }
+    if (!running) {
+      if (now - lastPoseAt > 800) { setMessage("没看到人\n请站到画面里"); return; }
+      if (!lastPts.has(15) && !lastPts.has(16)) { setMessage("没看到双手\n请站到画面里"); return; }
+      setMessage(`玩法：把球拍（双手中点）移到球的横向位置并挥动来击球\n蓝色竖线对应你的双手位置，用来对照球在哪\n先到 ${PP_TARGET} 分获胜；对拉越久球越快，越打越累`);
+      return;
+    }
+    if (now - lastPoseAt > 800) setMessage("未检测到人，请站到画面里");
+    else setMessage("");
+    return;
+  }
   if (mode() === "brick") {
     const note = !handsOnly() && !feetAvailable() ? "\n脚部未入镜，已自动只用双手" : "";
     if (!running) {
@@ -729,7 +791,8 @@ function frameStep() {
   }
   if (running) {
     if (mode() === "brick") updateBrick(now);
-    else updatePinball(now, dt);
+    else if (mode() === "pinball") updatePinball(now, dt);
+    else updatePing(now, dt);
   }
   updateOverlay(now);
   draw(now);
@@ -899,6 +962,169 @@ function startPinball() {
   ui.startBtn.textContent = "重新开始";
 }
 
+function ppServe() {
+  ppBall.x = PP_LEFT + 140 + Math.random() * (PP_RIGHT - PP_LEFT - 280);
+  ppBall.y = PP_TOP + 70;
+  ppBall.vx = (Math.random() * 2 - 1) * PP_VX * 0.6;
+  ppBall.vy = PP_BASE_VY;
+  ppBall.active = true;
+  ppTrail = [];
+}
+
+function ppStep(h, now, thresh) {
+  const b = ppBall;
+  b.x += b.vx * h;
+  b.y += b.vy * h;
+  if (b.x < PP_LEFT) { b.x = PP_LEFT; b.vx = Math.abs(b.vx); }
+  if (b.x > PP_RIGHT) { b.x = PP_RIGHT; b.vx = -Math.abs(b.vx); }
+
+  if (b.vy > 0 && b.y >= PP_BOTTOM - PP_HIT_BAND) {
+    const hl = lastPts.get(15);
+    const hr = lastPts.get(16);
+    const swing = Math.max(hl ? hl.s : 0, hr ? hr.s : 0);
+    if (Math.abs(ppPaddleX - b.x) < PP_HIT_R && swing >= thresh) {
+      const off = clamp((ppPaddleX - b.x) / PP_HIT_R, -1, 1);
+      b.vy = -Math.min(PP_MAX_VY, Math.abs(b.vy) * PP_RAMP + 60);
+      b.vx = off * PP_VX;
+      ppRally++;
+      const pts = 10 + Math.min(ppRally, 20) * 2;
+      ppScore += pts;
+      ppMsg = `对拉 ${ppRally} 拍　+${pts}`;
+      ppMsgAt = now;
+      return;
+    }
+    if (b.y > PP_BOTTOM + 40) {
+      b.active = false;
+      ppPointAi++;
+      ppRally = 0;
+      ppServeTimer = 1.3;
+      ppMsg = "没接到，对手得分";
+      ppMsgAt = now;
+      if (ppPointAi >= PP_TARGET) { ppOver = true; running = false; ppMsg = "对手赢下这一局"; }
+      return;
+    }
+  }
+
+  if (b.vy < 0 && b.y <= PP_TOP + PP_HIT_BAND) {
+    if (Math.abs(ppAiX - b.x) < PP_AI_R) {
+      const off = clamp((b.x - ppAiX) / PP_AI_R, -1, 1);
+      b.vy = Math.min(PP_MAX_VY, Math.abs(b.vy) * PP_RAMP + 40);
+      b.vx = off * PP_VX * 0.9;
+      return;
+    }
+    if (b.y < PP_TOP - 40) {
+      b.active = false;
+      ppPointMe++;
+      ppScore += 40;
+      ppRally = 0;
+      ppServeTimer = 1.3;
+      ppMsg = "对手没接到，你得分！";
+      ppMsgAt = now;
+      if (ppPointMe >= PP_TARGET) { ppOver = true; running = false; ppMsg = "你赢下这一局！"; }
+    }
+  }
+}
+
+function updatePing(now, dt) {
+  const hl = lastPts.get(15);
+  const hr = lastPts.get(16);
+  let px = null;
+  if (hl && hr) px = ((hl.x + hr.x) / 2) * W;
+  else if (hl) px = hl.x * W;
+  else if (hr) px = hr.x * W;
+  if (px !== null) ppPaddleX += 0.3 * (px - ppPaddleX);
+
+  if (ppBall.active && ppBall.vy < 0) {
+    const step = PP_AI_SPEED * dt;
+    ppAiX += clamp(ppBall.x - ppAiX, -step, step);
+  }
+  ppAiX = clamp(ppAiX, PP_LEFT + PP_AI_W / 2, PP_RIGHT - PP_AI_W / 2);
+
+  if (!ppBall.active) {
+    if (ppOver) return;
+    ppServeTimer -= dt;
+    if (ppServeTimer <= 0) ppServe();
+    return;
+  }
+
+  const thresh = Number(ui.ppswing.value) / 100;
+  const sdt = dt * Math.max(0.5, Number(ui.ppspeed.value) / 100);
+  const steps = Math.max(1, Math.min(8, Math.ceil(sdt / 0.008)));
+  const h = sdt / steps;
+  for (let i = 0; i < steps; i++) ppStep(h, now, thresh);
+
+  ppTrail.push({ x: ppBall.x, y: ppBall.y });
+  if (ppTrail.length > 10) ppTrail.shift();
+}
+
+function startPing() {
+  ppPointMe = 0;
+  ppPointAi = 0;
+  ppRally = 0;
+  ppScore = 0;
+  ppOver = false;
+  ppMsg = "";
+  ppAiX = W / 2;
+  ppPaddleX = W / 2;
+  ppTrail = [];
+  ppBall.active = false;
+  ppServeTimer = 1.0;
+  running = true;
+  ui.startBtn.textContent = "重新开始";
+}
+
+function drawPing() {
+  ctx.fillStyle = "#0e3b2e";
+  ctx.fillRect(PP_LEFT, PP_TOP, PP_RIGHT - PP_LEFT, PP_BOTTOM - PP_TOP);
+  ctx.strokeStyle = "rgba(255,255,255,0.5)";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(PP_LEFT, PP_TOP, PP_RIGHT - PP_LEFT, PP_BOTTOM - PP_TOP);
+  ctx.setLineDash([14, 12]);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.beginPath();
+  ctx.moveTo(PP_LEFT, PP_NET);
+  ctx.lineTo(PP_RIGHT, PP_NET);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.font = "20px sans-serif";
+  ctx.fillText("对手", PP_LEFT + 12, PP_TOP + 28);
+  ctx.fillText("你", PP_LEFT + 12, PP_BOTTOM - 12);
+
+  ctx.fillStyle = "#ff9f43";
+  ctx.fillRect(ppAiX - PP_AI_W / 2, PP_TOP + 22, PP_AI_W, 16);
+
+  ctx.strokeStyle = "rgba(77,171,247,0.5)";
+  ctx.lineWidth = 2;
+  for (const id of HAND_POINTS) {
+    const p = lastPts.get(id);
+    if (!p) continue;
+    ctx.beginPath();
+    ctx.moveTo(p.x * W, PP_BOTTOM - PP_HIT_BAND);
+    ctx.lineTo(p.x * W, PP_BOTTOM);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "#4dabf7";
+  ctx.fillRect(ppPaddleX - PP_PADDLE_W / 2, PP_BOTTOM - 46, PP_PADDLE_W, 18);
+
+  for (let i = 0; i < ppTrail.length; i++) {
+    const t = ppTrail[i];
+    ctx.globalAlpha = 0.1 + 0.45 * (i / ppTrail.length);
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 9, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if (ppBall.active) {
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(ppBall.x, ppBall.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 async function onStart() {
   if (!audioCtx) audioCtx = new AudioContext();
   audioCtx.resume();
@@ -910,7 +1136,8 @@ async function onStart() {
   ui.startBtn.disabled = false;
   running = false;
   if (mode() === "brick") startBrick();
-  else startPinball();
+  else if (mode() === "pinball") startPinball();
+  else startPing();
 }
 
 function onModeChange() {
